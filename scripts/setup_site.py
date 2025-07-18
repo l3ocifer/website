@@ -3,58 +3,72 @@
 import os
 import subprocess
 import logging
+import shutil
 from scripts.customize_site import customize_site
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-def check_node_version():
-    """Check if Node.js version meets requirements and set it."""
-    try:
-        # First ensure nvm is loaded and the correct version is installed
-        setup_cmd = (
-            'export NVM_DIR="$HOME/.nvm" && '
-            '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && '
-            'nvm install 18.18.0 > /dev/null 2>&1 && '
-            'nvm alias default 18.18.0 > /dev/null 2>&1 && '
-            'nvm use default > /dev/null 2>&1 && '
-            'PATH="$NVM_DIR/versions/node/v18.18.0/bin:$PATH" && '
-            'hash -r && '
-            'node --version'
+def check_node_requirements():
+    """Check if Node.js and npm meet minimum requirements."""
+    node_cmd = shutil.which('node')
+    npm_cmd = shutil.which('npm')
+    
+    if not node_cmd or not npm_cmd:
+        raise RuntimeError(
+            "Node.js and npm are required but not found. "
+            "Please run 'python scripts/install_requirements.py' first."
         )
-        node_version = subprocess.check_output(['bash', '-c', setup_cmd], text=True).strip()
+    
+    try:
+        # Check Node.js version
+        result = subprocess.run([node_cmd, '--version'], capture_output=True, text=True, check=True)
+        node_version = result.stdout.strip()
         
-        if not node_version.startswith('v18.18.0'):
-            raise ValueError(f"Node.js version mismatch. Got {node_version}, expected v18.18.0")
+        # Extract major version number
+        major_version = int(node_version.lstrip('v').split('.')[0])
+        if major_version < 18:
+            raise ValueError(f"Node.js version {node_version} is too old. Minimum required: v18.0.0")
         
-        # Update environment PATH to include the correct Node.js version
-        os.environ['PATH'] = f"{os.path.expanduser('~/.nvm/versions/node/v18.18.0/bin')}:{os.environ.get('PATH', '')}"
+        logging.info(f"Using Node.js {node_version}")
         
-        logging.info(f"Using Node.js version: {node_version}")
-        return True
-    except Exception as e:
-        logging.error(f"Failed to set up Node.js version: {str(e)}")
+        # Check npm version
+        result = subprocess.run([npm_cmd, '--version'], capture_output=True, text=True, check=True)
+        npm_version = result.stdout.strip()
+        logging.info(f"Using npm {npm_version}")
+        
+        return node_cmd, npm_cmd
+        
+    except (subprocess.CalledProcessError, ValueError, IndexError) as e:
+        raise RuntimeError(f"Node.js version check failed: {e}")
+
+def run_node_command(cmd, cwd=None, check=True):
+    """Run a Node.js command with proper environment setup."""
+    try:
+        logging.info(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, cwd=cwd, check=check, capture_output=False)
+        return result
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Command failed: {' '.join(cmd)}")
         raise
 
 def setup_nextjs_app(domain_name):
     """Set up the Next.js application."""
-    # Check Node.js version before proceeding
-    check_node_version()
+    # Check Node.js requirements before proceeding
+    node_cmd, npm_cmd = check_node_requirements()
     
     app_dir = 'next-app'
     if os.path.exists(app_dir):
         logging.info("Next.js app already exists. Skipping creation.")
     else:
         logging.info("Creating Next.js app...")
-        create_cmd = (
-            'export NVM_DIR="$HOME/.nvm" && '
-            '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && '
-            'PATH="$NVM_DIR/versions/node/v18.18.0/bin:$PATH" && '
-            'hash -r && '
-            'npx --yes create-next-app@latest next-app '
-            '--typescript --tailwind --eslint --app --src-dir --import-alias @/* --use-npm --yes'
-        )
-        subprocess.run(['bash', '-c', create_cmd], check=True)
+        # Use npx to create Next.js app with latest stable version
+        create_cmd = [
+            'npx', '--yes', 'create-next-app@latest', 'next-app',
+            '--typescript', '--tailwind', '--eslint', '--app', 
+            '--src-dir', '--import-alias', '@/*', '--use-npm', '--yes'
+        ]
+        run_node_command(create_cmd)
         
         # Add Next.js app to git
         logging.info("Adding Next.js app to git...")
@@ -62,30 +76,23 @@ def setup_nextjs_app(domain_name):
         subprocess.run(['git', 'commit', '-m', 'initial next.js app setup'], check=True)
         subprocess.run(['git', 'push'], check=True)
     
-    # Install dependencies using the correct Node.js version
+    # Install dependencies
     logging.info("Installing Node.js dependencies...")
-    install_cmd = (
-        'export NVM_DIR="$HOME/.nvm" && '
-        '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" && '
-        'PATH="$NVM_DIR/versions/node/v18.18.0/bin:$PATH" && '
-        'hash -r && '
-        'cd next-app && npm install'
-    )
-    subprocess.run(['bash', '-c', install_cmd], check=True)
+    run_node_command([npm_cmd, 'install'], cwd=app_dir)
 
 def build_nextjs_app():
     """Build the Next.js app."""
     logging.info("Building Next.js app...")
-    build_cmd = (
-        'export NVM_DIR="$HOME/.nvm" && '
-        '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh" && '
-        'PATH="$NVM_DIR/versions/node/v18.18.0/bin:$PATH" && '
-        'hash -r && '
-        'cd next-app && '
-        'npm install && '
-        'npm run build'
-    )
-    subprocess.run(['bash', '-c', build_cmd], check=True)
+    node_cmd, npm_cmd = check_node_requirements()
+    
+    app_dir = 'next-app'
+    
+    # Ensure dependencies are installed
+    run_node_command([npm_cmd, 'install'], cwd=app_dir)
+    
+    # Build the app
+    run_node_command([npm_cmd, 'run', 'build'], cwd=app_dir)
+    
     logging.info("Next.js app built successfully.")
 
 def setup_site(domain_name):

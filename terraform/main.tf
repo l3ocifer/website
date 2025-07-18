@@ -1,6 +1,15 @@
 # File: terraform/main.tf
 
 terraform {
+  required_version = ">= 1.9.0"
+  
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.82"
+    }
+  }
+  
   backend "s3" {
     # The bucket name will be provided via backend-config
     key    = "terraform.tfstate"
